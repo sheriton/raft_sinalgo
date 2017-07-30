@@ -1,0 +1,26 @@
+This is a sample project to demonstrate the Raft Consensus Protocol.
+
+1  How to run this sample
+-----------------------------------------------------------------------------------
+
+ a) Run this project in GUI mode, and start by creating network nodes:
+    - Click on the menu 'Graph' -> 'Generate Nodes', and create 100 nodes. 
+      The selected models should already match.
+     
+ b) Start the simulation by pressing the start button.
+
+
+2  Description
+-----------------------------------------------------------------------------------
+
+ This sample simulates an implementation of Raft Algorithm [1], for the Distributed 
+ Algorithm discipline of the postgraduate program of the computer science department
+ of the Pontifical Catholic University of Rio de Janeiro.
+ 
+ 
+3 References
+ -----------------------------------------------------------------------------------
+ 
+ [1] Ongaro, Diego, and John K. Ousterhout. 
+ "In search of an understandable consensus algorithm." USENIX Annual Technical Conference. 2014. 
+ 
