@@ -39,37 +39,24 @@ package projects.raft.nodes.nodeImplementations;
 
 import java.awt.Color;
 import java.awt.Graphics;
-import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Hashtable;
 import java.util.List;
 import java.util.Random;
-import java.util.TreeSet;
-
-import projects.garciaMolinaInvitation.nodes.nodeImplementations.State;
+import projects.raft.Tabela;
 import projects.raft.nodes.messages.AppendEntries;
 import projects.raft.nodes.messages.AppendEntriesAnswer;
-import projects.raft.nodes.messages.RaftMessage;
+import projects.raft.nodes.messages.MsgGenerica;
 import projects.raft.nodes.messages.VoteRequest;
 import projects.raft.nodes.messages.VoteRequestAnswer;
 import projects.raft.nodes.timers.ElectionTimer;
 import projects.raft.nodes.timers.RPCTimer;
-import projects.sample5.nodes.messages.PayloadMsg;
-import projects.sample5.nodes.nodeImplementations.FNode;
-import projects.sample5.nodes.timers.PayloadMessageTimer;
 import sinalgo.configuration.WrongConfigurationException;
-import sinalgo.gui.helper.NodeSelectionHandler;
 import sinalgo.gui.transformation.PositionTransformation;
 import sinalgo.io.eps.EPSOutputPrintStream;
 import sinalgo.nodes.Node;
-import sinalgo.nodes.Node.NodePopupMethod;
-import sinalgo.nodes.edges.Edge;
 import sinalgo.nodes.messages.Inbox;
-import sinalgo.nodes.messages.Message;
-import sinalgo.runtime.Runtime;
-import sinalgo.runtime.nodeCollection.NodeCollectionInfoInterface;
 import sinalgo.runtime.nodeCollection.NodeCollectionInterface;
-import sinalgo.tools.Tools;
 import sinalgo.tools.statistics.Distribution;
 
 
@@ -78,6 +65,11 @@ import sinalgo.tools.statistics.Distribution;
  */
 public class RaftNode extends Node implements Comparable<RaftNode> {
 
+	
+	/** indicador de mensagens recebidas e reenviadas */
+	private Tabela tabela;
+	
+	
 	/* variables */
 	private int numberOfNodes = 0;
 	private int seqId = 0;
@@ -109,6 +101,11 @@ public class RaftNode extends Node implements Comparable<RaftNode> {
 	
 	private Random dRandom = Distribution.getRandom();
 	
+	public RaftNode()
+	{
+		this.tabela = new Tabela();
+	}
+	
 	/**
 	 * Inicializa as listas de indices
 	 * @param numberOfNodes
@@ -127,7 +124,7 @@ public class RaftNode extends Node implements Comparable<RaftNode> {
 		// initialize index vectors
 		//nextIndex = new int[numberOfNodes];
 
-		int i = 0;
+//		int i = 0;
 		// inicializa a tabela de rpcTimers, existe um rpcTimer para cada servidor na rede
 		for (Node node : listAllNodes)
 		{
@@ -211,21 +208,20 @@ public class RaftNode extends Node implements Comparable<RaftNode> {
 	private void sendAppendEntries()
 	{
 		AppendEntries appendEntries = new AppendEntries();
-		appendEntries.seqId = this.seqId++;
-		appendEntries.term = this.currentTerm;
-		appendEntries.sender = this;
-		appendEntries.target = null;
-		appendEntries.ttl = dVote;
+		appendEntries.setSequencial(this.seqId++);
+		appendEntries.setTerm(this.currentTerm);
+		appendEntries.setNoOrigem(this);
+		appendEntries.setNoDestino(null);
 		
-		appendEntries.logEntries = new ArrayList<LogEntry>();
+		appendEntries.setLogEntries(new ArrayList<LogEntry>());
 		for (LogEntry entry : this.logEntries)
 		{
-			appendEntries.logEntries.add(entry);
+			appendEntries.getLogEntries().add(entry);
 		}
 		
-		appendEntries.prevLogIndex = appendEntries.logEntries.size() - 1;
-		appendEntries.prevLogTerm = appendEntries.logEntries.size() == 0 ? -1 : appendEntries.logEntries.get(appendEntries.logEntries.size() - 1).term;
-		appendEntries.commitIndex = this.commitIndex;
+		appendEntries.setPrevLogIndex(appendEntries.getLogEntries().size() - 1);
+		appendEntries.setPrevLogTerm(appendEntries.getLogEntries().size() == 0 ? -1 : appendEntries.getLogEntries().get(appendEntries.getLogEntries().size() - 1).term);
+		appendEntries.setCommitIndex(this.commitIndex);
 		
 		broadcast(appendEntries);
 	}
@@ -239,59 +235,84 @@ public class RaftNode extends Node implements Comparable<RaftNode> {
 	{
 		// tem q enviar o RequestVote para todos
 		VoteRequest voteRequest = new VoteRequest();
-		voteRequest.term = this.currentTerm;
-		voteRequest.leader = this;
-		voteRequest.sender = this;
-		voteRequest.target = node;
-		voteRequest.seqId = this.seqId++;
-		voteRequest.lastLogIndex = this.logEntries.size() - 1;
-		voteRequest.lastLogTerm = this.logEntries.size() == 0 ? -1 : this.logEntries.get(this.logEntries.size() - 1).term;
-		voteRequest.ttl = dVote; // se não chegou até a rodada em que o timer de espera da resposta expira, não precisa repassar, pq o remetente já vai enviar outra msg.
-		
+		voteRequest.setTerm(this.currentTerm);
+		voteRequest.setLeader(this);
+		voteRequest.setNoOrigem(this);
+		voteRequest.setNoDestino(node);
+		voteRequest.setSequencial(this.seqId++);
+		voteRequest.setLastLogIndex(this.logEntries.size() - 1);
+		voteRequest.setLastLogTerm(this.logEntries.size() == 0 ? -1 : this.logEntries.get(this.logEntries.size() - 1).term);
+	
 		return voteRequest;
 	}
 
+	/***
+	 * Trata as mensagens recebidas
+	 */
 	@Override
 	public void handleMessages(Inbox inbox) {
 		while (inbox.hasNext())
 		{
-			RaftMessage msg = (RaftMessage)inbox.next();
-		
-			if (msg.sender == this) // se ele mesmo enviou a msg, não repassa
-				continue;
+			MsgGenerica msg = (MsgGenerica) inbox.next();
+			if(!roteamento(msg)) continue;
 			
-			// controle de propagação de mensagens, além disso, mais abaixo ele volta a verificar se a msg é pra ele, se sim não propaga a msg.
-			Integer seqId = tableOfMessages.get(msg.sender);
-			if (seqId == null || msg.seqId > seqId)
-				tableOfMessages.put(msg.sender, msg.seqId); // novo vizinho enviando mensagens, inclui na tabela
-			else
-				continue; 	// ignora a msg e continua o loop
-				
-			if (msg instanceof VoteRequest)
-			{
-				OnReceiveVoteRequest((VoteRequest)msg);	
-			}
-			else if (msg instanceof VoteRequestAnswer)
-			{
-				OnReceiveVoteAnswer((VoteRequestAnswer)msg);
-			}
-			else if (msg instanceof AppendEntries)
-			{
-				OnReceiveAppendEntries((AppendEntries)msg);	
-			}
-			else if (msg instanceof AppendEntriesAnswer)
-			{
-				OnReceiveAppendEntriesAnswer((AppendEntriesAnswer)msg);
-			}
+			msg.acao(this);
 		}
 	}
 	
-	private void OnReceiveVoteRequest(VoteRequest voteRequest)
+	/**
+	 * Realiza o roteamento das mensagens<br>
+	 * @param msg mensagem a ser roteada
+	 * @return verdadeiro se a mensagem (também) deve ser tratada localmente
+	 */
+	private boolean roteamento(MsgGenerica msg) {
+		// verifica se deve repassar a mensagem para os outros nós
+		// a mensagem será roteada se:
+		// - (1) não tiver sido originada nesse nó (verificar noOrigem da msg)
+		// - (2) não tiver sido recebida anteriormente por esse nó (verificar sequência e tipo da msg)
+		// - (3) o destino não for unicamente esse nó (verificar noDestino da msg)
+		if(msg.getNoOrigem().ID != this.ID &&	// (1)
+		   msg.getSequencial() > tabela.getSequencia(msg.getNoOrigem().ID, msg.getClass().getSimpleName())) {	// (2)
+			// mensagem nova de outro nó
+			// acrescenta na lista de msg já recebidas
+			tabela.setSequencia(msg.getNoOrigem().ID, msg.getClass().getSimpleName(), msg.getSequencial());
+			if(msg.getNoDestino() == null) {
+				// mensagem em broadcast
+				// repasssa a mensagem e avisa que deve ser tratada localmente
+				this.broadcast(msg);
+				return true;
+			}
+			else {
+				// mensagem em unicast
+				// verifica se é para esse nó
+				if(msg.getNoDestino().ID == this.ID) {
+					return true;
+				}
+				else {
+					// mensagem em unicast para outro nó
+					// deve ser repassada
+					// não deve ser tratada localmente
+					this.broadcast(msg);
+					return false;
+				}
+			}
+		}
+		else {
+			// mensagem velha
+			// já está na tabela de mensagens
+			// não deve ser repassada
+			// não deve ser tratada localmente
+			return false;
+		}
+	}
+	
+	
+	public void OnReceiveVoteRequest(VoteRequest voteRequest)
 	{
-		if(voteRequest.term > this.currentTerm)
-			stepdown(voteRequest.term);
+		if(voteRequest.getTerm() > this.currentTerm)
+			stepdown(voteRequest.getTerm());
 		
-		if(voteRequest.term == this.currentTerm && votedFor == null)
+		if(voteRequest.getTerm() == this.currentTerm && votedFor == null)
 		{
 			int lastLogIndex = this.logEntries.size() - 1;
 			int lastLogTerm = lastLogIndex < 0 ? -1 : this.logEntries.get(lastLogIndex).term;
@@ -304,50 +325,31 @@ public class RaftNode extends Node implements Comparable<RaftNode> {
 			 * O Raft prevê que caso o voteRequest vier de um servidor que não possuí o log mais atual (more up-to-date), 
 			 * então os outros servidores não vão lhe dar seus votos.
 			 */
-			if ((voteRequest.lastLogTerm > lastLogTerm) || 
-				(voteRequest.lastLogTerm == lastLogTerm && voteRequest.lastLogIndex >= lastLogIndex))
+			if ((voteRequest.getLastLogTerm() > lastLogTerm) || 
+				(voteRequest.getLastLogTerm() == lastLogTerm && voteRequest.getLastLogIndex() >= lastLogIndex))
 			{
-				this.votedFor = voteRequest.leader;
+				this.votedFor = voteRequest.getLeader();
 				setElectionTimeout(random(1F, 2F) * dElection);
 			}
 		}
 		
 		VoteRequestAnswer voteAns = new VoteRequestAnswer();
-		voteAns.term = voteRequest.term;
-		voteAns.voteGranted = this.votedFor != null && voteRequest.leader.ID == this.votedFor.ID;
-		voteAns.target = voteRequest.leader;
-		voteAns.sender = this;
-		voteAns.seqId = this.seqId++;
-		voteAns.ttl = dVote;
+		voteAns.setTerm(voteRequest.getTerm());
+		voteAns.setVoteGranted(this.votedFor != null && voteRequest.getLeader().ID == this.votedFor.ID);
+		voteAns.setNoDestino(voteRequest.getLeader());
+		voteAns.setNoOrigem(this);
+		voteAns.setSequencial(this.seqId++);
 		broadcast(voteAns);
-		
-		
-		// repassa a msg
-		VoteRequest msgClone = (VoteRequest) voteRequest.clone();
-		msgClone.ttl--;
-		if (msgClone.ttl > 0)
-			broadcast(msgClone);
 	}
 
-	private void OnReceiveVoteAnswer(VoteRequestAnswer voteRequestAnswer)
+	public void OnReceiveVoteAnswer(VoteRequestAnswer voteRequestAnswer)
 	{
-		// se a msg não é pra mim repassa
-		if (voteRequestAnswer.target.ID != this.ID)
-		{
-			VoteRequestAnswer msgClone = (VoteRequestAnswer) voteRequestAnswer.clone();
-			msgClone.ttl--;
-			if (msgClone.ttl > 0)
-				broadcast(msgClone);
-			
-			return;
-		}
+		if (voteRequestAnswer.getTerm() > this.currentTerm)
+			stepdown(voteRequestAnswer.getTerm());
 		
-		if (voteRequestAnswer.term > this.currentTerm)
-			stepdown(voteRequestAnswer.term);
-		
-		if (voteRequestAnswer.term == this.currentTerm && this.state == RaftState.CANDIDATE) 
+		if (voteRequestAnswer.getTerm() == this.currentTerm && this.state == RaftState.CANDIDATE) 
 		{
-			if (voteRequestAnswer.voteGranted)
+			if (voteRequestAnswer.isVoteGranted())
 				this.votes++;
 			
 			if (votes > this.numberOfNodes / 2) // ganhou a eleição
@@ -362,49 +364,47 @@ public class RaftNode extends Node implements Comparable<RaftNode> {
 		}
 	}
 	
-	private void OnReceiveAppendEntries(AppendEntries appendEntries)
+	public void OnReceiveAppendEntries(AppendEntries appendEntries)
 	{
-		if (appendEntries.term > this.currentTerm)
+		if (appendEntries.getTerm() > this.currentTerm)
 		{
-			stepdown(appendEntries.term);
+			stepdown(appendEntries.getTerm());
 		}
 		
-		if (this.state == RaftState.CANDIDATE && appendEntries.term == this.currentTerm)
+		if (this.state == RaftState.CANDIDATE && appendEntries.getTerm() == this.currentTerm)
 		{
-			stepdown(appendEntries.term);
+			stepdown(appendEntries.getTerm());
 		}
 		
-		if (appendEntries.term < this.currentTerm)
+		if (appendEntries.getTerm() < this.currentTerm)
 		{
 			AppendEntriesAnswer appendRep = new AppendEntriesAnswer();
-			appendRep.term = this.currentTerm;
-			appendRep.sender = this;
-			appendRep.target = appendEntries.sender;
-			appendRep.ttl = dVote;
-			appendRep.seqId = this.seqId++;
+			appendRep.setTerm(this.currentTerm);
+			appendRep.setNoOrigem(this);
+			appendRep.setNoDestino(appendEntries.getNoOrigem());
+			appendRep.setSequencial(this.seqId++);
 
-			appendRep.success = false;
+			appendRep.setSuccess(false);
 			
 			broadcast(appendRep);
 		}
 		else 
 		{
-			this.votedFor = appendEntries.sender; 	// se recebeu um appendEntries com um termo mais alto, então o cara que enviou é o lider e ponto
+			this.votedFor = appendEntries.getNoOrigem(); 	// se recebeu um appendEntries com um termo mais alto, então o cara que enviou é o lider e ponto
 			
 			int prevIndex = logEntries.size() - 1;
 			int prevTerm = logEntries.size() == 0 ? -1 : logEntries.get(prevIndex).term;
 			
 			AppendEntriesAnswer appendRep = new AppendEntriesAnswer();
-			appendRep.term = this.currentTerm;
-			appendRep.sender = this;
-			appendRep.target = appendEntries.sender;
-			appendRep.ttl = dVote;
-			appendRep.seqId = this.seqId++;
+			appendRep.setTerm(this.currentTerm);
+			appendRep.setNoOrigem(this);
+			appendRep.setNoDestino(appendEntries.getNoOrigem());
+			appendRep.setSequencial(this.seqId++);
 			
-			appendRep.success = prevIndex <= appendEntries.prevLogIndex && prevTerm <= appendEntries.prevLogTerm;
-			appendRep.matchIndex = appendEntries.prevLogIndex;
+			appendRep.setSuccess(prevIndex <= appendEntries.getPrevLogIndex() && prevTerm <= appendEntries.getPrevLogTerm());
+			appendRep.setMatchIndex(appendEntries.getPrevLogIndex());
 			
-			storeEntries(appendEntries.logEntries, appendEntries.commitIndex);
+			storeEntries(appendEntries.getLogEntries(), appendEntries.getCommitIndex());
 			
 			broadcast(appendRep);
 			
@@ -413,55 +413,42 @@ public class RaftNode extends Node implements Comparable<RaftNode> {
 			
 			// recomeça a contagem
 			setElectionTimeout(random(1F, 2F) * dElection);
-			
-			// passa adiante
-			AppendEntries appendMsg = (AppendEntries)appendEntries.clone();
-			appendMsg.ttl--;
-			broadcast(appendMsg);
 		}
 	}
 	
-	private void OnReceiveAppendEntriesAnswer(AppendEntriesAnswer appendEntriesAnswer)
+	public void OnReceiveAppendEntriesAnswer(AppendEntriesAnswer appendEntriesAnswer)
 	{
-		if (appendEntriesAnswer.target.ID != this.ID)
+		if (appendEntriesAnswer.getTerm() > this.currentTerm)
 		{
-			AppendEntriesAnswer appendRep = (AppendEntriesAnswer)appendEntriesAnswer.clone();
-			appendRep.ttl--;
-			broadcast(appendRep);
-			return;
+			stepdown(appendEntriesAnswer.getTerm());
 		}
-
-			
-		if (appendEntriesAnswer.term > this.currentTerm)
+		else if (this.state == RaftState.LEADER && appendEntriesAnswer.getTerm() == this.currentTerm)
 		{
-			stepdown(appendEntriesAnswer.term);
-		}
-		else if (this.state == RaftState.LEADER && appendEntriesAnswer.term == this.currentTerm)
-		{
-			int lastMatchIndex = matchIndexTable.get(appendEntriesAnswer.sender);
+			int lastMatchIndex = matchIndexTable.get(appendEntriesAnswer.getNoOrigem());
 			
-			if (lastMatchIndex < appendEntriesAnswer.matchIndex) // house alteração no matchIndex do nó
+			if (lastMatchIndex < appendEntriesAnswer.getMatchIndex()) // house alteração no matchIndex do nó
 			{
-				matchIndexTable.put(appendEntriesAnswer.sender, appendEntriesAnswer.matchIndex);
+				matchIndexTable.put(appendEntriesAnswer.getNoOrigem(), appendEntriesAnswer.getMatchIndex());
 				
 				// se o matchIndex retornado é maior que o commitIndex do lider, então verifica se pode comitar um novo comando
-				if (appendEntriesAnswer.matchIndex > this.commitIndex)
+				if (appendEntriesAnswer.getMatchIndex() > this.commitIndex)
 				{
 					int count = 0;
 					for (int matchIndex : matchIndexTable.values())
 					{
-						if (matchIndex == appendEntriesAnswer.matchIndex)
+						if (matchIndex == appendEntriesAnswer.getMatchIndex())
 							count++;
 					}
 					
 					// se o matchIndex recebido ocorre mais da metade das vezes, então pode comitar um novo comando
 					if (count > numberOfNodes / 2)
-						this.commitIndex = appendEntriesAnswer.matchIndex;
+						this.commitIndex = appendEntriesAnswer.getMatchIndex();
 				}
 			}
 		}
 	}
 
+	
 	private void setElectionTimeout(double t)
 	{
 		// só para garantir que 2 timers não vão acontecer de forma concorrente no mesmo nó
@@ -501,7 +488,6 @@ public class RaftNode extends Node implements Comparable<RaftNode> {
 		}
 	}
 	
-	
 	private void setRPCTimeout()
 	{
 		globalRPCTimer = new RPCTimer(null);
@@ -530,6 +516,8 @@ public class RaftNode extends Node implements Comparable<RaftNode> {
 			setRPCTimeout();
 		}
 	}
+	
+
 	
 	
 	

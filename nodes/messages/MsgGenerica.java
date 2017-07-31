@@ -10,12 +10,15 @@ import sinalgo.nodes.messages.Message;
 
 public abstract class MsgGenerica extends Message {
 	/** origem da mensagem */
-	protected Node noOrigem;
+	protected RaftNode noOrigem;
 	/** destino da mensagem */
-	protected Node noDestino;
+	protected RaftNode noDestino;
 	/** contador de mensagens, utilizado para que os nós não repassem mensagens repetidas */
 	protected int sequencial;
 
+	/** guarda o term em que a mensagem foi criada */
+	protected int term;
+	
 	/**
 	 * 
 	 */
@@ -28,19 +31,19 @@ public abstract class MsgGenerica extends Message {
 	 */
 	public abstract void acao (RaftNode node);
 
-	public final Node getNoOrigem() {
+	public final RaftNode getNoOrigem() {
 		return this.noOrigem;
 	}
 
-	public final void setNoOrigem(Node noOrigem) {
+	public final void setNoOrigem(RaftNode noOrigem) {
 		this.noOrigem = noOrigem;
 	}
 
-	public final Node getNoDestino() {
+	public final RaftNode getNoDestino() {
 		return this.noDestino;
 	}
 
-	public final void setNoDestino(Node noDestino) {
+	public final void setNoDestino(RaftNode noDestino) {
 		this.noDestino = noDestino;
 	}
 
@@ -50,6 +53,14 @@ public abstract class MsgGenerica extends Message {
 
 	public final void setSequencial(int sequencial) {
 		this.sequencial = sequencial;
+	}
+
+	public final int getTerm() {
+		return this.term;
+	}
+	
+	public final void setTerm(int term) {
+		this.term = term;
 	}
 	
 	@Override
