@@ -38,17 +38,11 @@ package projects.raft;
 
 import java.lang.reflect.Method;
 
-import javax.swing.JOptionPane;
-
 import projects.raft.nodes.nodeImplementations.RaftNode;
-import projects.raft.nodes.nodeImplementations.RaftState;
-import sinalgo.configuration.Configuration;
-import sinalgo.configuration.CorruptConfigurationEntryException;
 import sinalgo.nodes.Node;
 import sinalgo.runtime.AbstractCustomGlobal;
 import sinalgo.tools.Tools;
 import sinalgo.tools.logging.Logging;
-import sinalgo.tools.statistics.Distribution;
 
 
 /**

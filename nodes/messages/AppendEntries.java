@@ -62,7 +62,7 @@ public class AppendEntries extends MsgGenerica {
 	}
 
 	@Override
-	public void acao(RaftNode node) {
+	public void acao(RaftNode node) {		
 		node.OnReceiveAppendEntries(this);
 	}
 

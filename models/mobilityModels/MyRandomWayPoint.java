@@ -33,24 +33,29 @@ public class MyRandomWayPoint extends MobilityModel {
 		 */
 		public Position getNextPos(Node n) {
 			// restart a new move to a new destination if the node was moved by another means than this mobility model
-			if(currentPosition != null) {
+			if(currentPosition != null) 
+			{
 				if(!currentPosition.equals(n.getPosition())) {
 					remaining_waitingTime = 0;
 					remaining_hops = 0;
 				}
-			} else {
+			} 
+			else 
+			{
 				currentPosition = new Position(0, 0, 0);
 			}
 			
 			Position nextPosition = new Position();
 			
 			// execute the waiting loop
-			if(remaining_waitingTime > 0) {
+			if(remaining_waitingTime > 0) 
+			{
 				remaining_waitingTime --;
 				return n.getPosition();
 			}
 
-			if(remaining_hops == 0) {
+			if(remaining_hops == 0) 
+			{
 				// determine the speed at which this node moves
 				double speed = Math.abs(speedDistribution.nextSample()); // units per round
 
@@ -69,14 +74,19 @@ public class MyRandomWayPoint extends MobilityModel {
 				moveVector.yCoord = dy / rounds;
 				moveVector.zCoord = dz / rounds;
 			}
-			if(remaining_hops <= 1) { // don't add the moveVector, as this may move over the destination.
+
+			
+			if(remaining_hops <= 1) // don't add the moveVector, as this may move over the destination.
+			{ 
 				nextPosition.xCoord = nextDestination.xCoord;
 				nextPosition.yCoord = nextDestination.yCoord;
 				nextPosition.zCoord = nextDestination.zCoord;
 				// set the next waiting time that executes after this mobility phase
 				remaining_waitingTime = (int) Math.ceil(waitingTimeDistribution.nextSample());
 				remaining_hops = 0;
-			} else {
+			} 
+			else 
+			{
 				double newx = n.getPosition().xCoord + moveVector.xCoord; 
 				double newy = n.getPosition().yCoord + moveVector.yCoord; 
 				double newz = n.getPosition().zCoord + moveVector.zCoord; 
@@ -96,7 +106,7 @@ public class MyRandomWayPoint extends MobilityModel {
 					Main.fatalError("A node is standing in a lake. Cannot find a step outside.");
 				}
 				
-				/* vai cair num 'lago' */
+				/* vai cair num 'lago'  */
 				if (!map.isWhite(nextPosition)) 
 				{
 					currentPosition = n.getPosition();
@@ -129,7 +139,7 @@ public class MyRandomWayPoint extends MobilityModel {
 			
 			if (Main.getRuntime().getTransformator().getNumberOfDimensions() == 3) {
 				/* not implemented */
-				/* should define nextZ coordinate, but before we need to decompose the distance in R^3 */
+				/* we need to decompose the distance in R^3, then we can define nextZ coordinate */
 			}
 			
 			return new Position(nextX, nextY, nextZ);

@@ -5,8 +5,8 @@ import sinalgo.nodes.messages.Message;
 
 public class AppendEntriesAnswer extends MsgGenerica {
 	
-	private boolean success;
-	private int matchIndex;
+	private boolean success = false;
+	private int matchIndex = -1;
 	
 	public boolean isSuccess() {
 		return success;

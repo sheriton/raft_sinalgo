@@ -84,8 +84,8 @@ public class RaftNode extends Node implements Comparable<RaftNode> {
 	/* Non-persistent state */
 	public RaftState state = RaftState.FOLLOWER;
 	public int commitIndex = -1;
-	//private int[] nextIndex = null; // deve ser inicializado com o número total de nós
-	//private int[] matchIndex = null;
+	public int matchIndex = -1;
+
 	private Hashtable<Node, Integer> matchIndexTable = new Hashtable<Node, Integer>();
 
 	/* timers */
@@ -110,26 +110,20 @@ public class RaftNode extends Node implements Comparable<RaftNode> {
 	 * Inicializa as listas de indices
 	 * @param numberOfNodes
 	 */
-	public void initialize(NodeCollectionInterface listAllNodes) {
+	public void initialize(NodeCollectionInterface listAllNodes) 
+	{
 		this.numberOfNodes = listAllNodes.size();
 		this.listAllNodes = listAllNodes;
 		
 		// dVote é o tempo que o leader vai aguardar até enviar um heartbeat
-		//dVote = (int)Math.pow(numberOfNodes, 2);
 		dVote = numberOfNodes * 2;
 		
 		// dElection é o tempo que um follower aguarda até receber um heartbeat
 		dElection = 2 * dVote;
 		
-		// initialize index vectors
-		//nextIndex = new int[numberOfNodes];
-
-//		int i = 0;
 		// inicializa a tabela de rpcTimers, existe um rpcTimer para cada servidor na rede
 		for (Node node : listAllNodes)
 		{
-			//nextIndex[i] = 0;	// indica que o próximo índice é o primeiro
-			
 			matchIndexTable.put(node, -1); // indica que não existe match no início
 			tableOfMessages.put(node, -1);
 			tableOfVotes.put(node, false);
@@ -137,21 +131,26 @@ public class RaftNode extends Node implements Comparable<RaftNode> {
 			rpcTimers.put(node, new RPCTimer((RaftNode)node));
 		}
 		
-		// inicia o timer para esperar por um heartbeat ou um comando
+		// inicia um election timer aleatório para esperar por um heartbeat ou um comando
 		setElectionTimeout(random(1F, 2F) * numberOfNodes);
 	}
 	
 	/**
-	 * Simulates a request command from client.
-	 * Should be called randomically from CustomGlobal
+	 * Simulates a request command from client.<br>
+	 * Should be called randomically from CustomGlobal.<br>
 	 * @param command
 	 */
-	public void clientRequest(String command) {
+	public void clientRequest(String command) 
+	{
+		// se não é lider, ignora o comando
+		if (this.state != RaftState.LEADER)
+			return;
+		
+		// insere o novo item no próprio log
 		LogEntry logEntry = new LogEntry(currentTerm, command);		
 		logEntries.add(logEntry);
-		
-		//sendAppendEntries();
 	}
+
 	
 	/**
 	 * Atualiza o currentTerm para o termo atual, volta para o estado Follower
@@ -163,6 +162,8 @@ public class RaftNode extends Node implements Comparable<RaftNode> {
 		this.currentTerm = term;
 		this.state = RaftState.FOLLOWER;
 		this.votedFor = null;
+		
+		this.matchIndex = this.commitIndex;
 		
 		setElectionTimeout(random(1F, 2F) * dElection);
 	}
@@ -185,51 +186,81 @@ public class RaftNode extends Node implements Comparable<RaftNode> {
 		return i + (1F - dRandom.nextDouble())*(j - i);
 	}
 	
-	private void storeEntries(List<LogEntry> entries, int commitedIndex)
+	/**
+	 * Armazena um novo comando no log
+	 * @param entries
+	 */
+	private void storeEntries(List<LogEntry> entries)
 	{
 		if (entries.size() == 0)
 			return;
 		
+		int nextIndex = this.matchIndex + 1;
+		
 		for (int i = 0; i < entries.size(); i++)
 		{
-			if (i < this.logEntries.size() && !this.logEntries.get(i).equals(entries.get(i)))
-			{
-				this.logEntries.set(i, entries.get(i));
-			}
-			else if (i >= this.logEntries.size())
-			{
+			if (nextIndex >= this.logEntries.size())
 				this.logEntries.add(entries.get(i));
-			}
+			else 
+				this.logEntries.set(nextIndex, entries.get(i));
 		}
 		
-		this.commitIndex = Math.min(commitedIndex, entries.size() - 1);
+		this.matchIndex += entries.size();		
 	}
 	
-	private void sendAppendEntries()
+	/**
+	 * Envia um comando do log para um nó
+	 * @param node - nó para onde o comando será enviado
+	 * @param index	- índice do comando no vetor de log
+	 */
+	private void sendAppendEntries(Node node, int index)
 	{
+		if (index >= this.logEntries.size())
+			return;
+		
 		AppendEntries appendEntries = new AppendEntries();
 		appendEntries.setSequencial(this.seqId++);
 		appendEntries.setTerm(this.currentTerm);
 		appendEntries.setNoOrigem(this);
-		appendEntries.setNoDestino(null);
+		appendEntries.setNoDestino((RaftNode)node);
 		
 		appendEntries.setLogEntries(new ArrayList<LogEntry>());
-		for (LogEntry entry : this.logEntries)
-		{
-			appendEntries.getLogEntries().add(entry);
-		}
+		appendEntries.getLogEntries().add(this.logEntries.get(index));
 		
-		appendEntries.setPrevLogIndex(appendEntries.getLogEntries().size() - 1);
-		appendEntries.setPrevLogTerm(appendEntries.getLogEntries().size() == 0 ? -1 : appendEntries.getLogEntries().get(appendEntries.getLogEntries().size() - 1).term);
+		appendEntries.setPrevLogIndex(index == 0 ? -1 : index - 1);
+		appendEntries.setPrevLogTerm(index == 0 ? -1 : this.logEntries.get(index - 1).term);
 		appendEntries.setCommitIndex(this.commitIndex);
 		
 		broadcast(appendEntries);
 	}
 	
+	/**
+	 * Envia um heartbeat para cada um dos nós conectados <br>
+	 * cada nó recebe como heartbeat o último matchIndex conhecido pelo lider
+	 */
 	private void sendHeartbeat()
 	{
-		sendAppendEntries();
+		for (Node node : this.listAllNodes)
+		{
+			if (node.ID == this.ID)
+				continue;
+			
+			AppendEntries hearbeat = new AppendEntries();
+			hearbeat.setSequencial(this.seqId++);
+			hearbeat.setTerm(this.currentTerm);
+			hearbeat.setNoOrigem(this);
+			hearbeat.setNoDestino((RaftNode)node);
+			
+			hearbeat.setLogEntries(new ArrayList<LogEntry>());
+			
+			hearbeat.setPrevLogIndex(this.matchIndexTable.get(node));
+			hearbeat.setPrevLogTerm(this.logEntries.size() == 0 ? -1 : this.logEntries.get(this.logEntries.size() - 1).term);
+			hearbeat.setCommitIndex(this.commitIndex);
+			
+			broadcast(hearbeat);
+		}
 	}
+	
 	
 	private VoteRequest newVoteRequest(RaftNode node)
 	{
@@ -272,23 +303,28 @@ public class RaftNode extends Node implements Comparable<RaftNode> {
 		// - (2) não tiver sido recebida anteriormente por esse nó (verificar sequência e tipo da msg)
 		// - (3) o destino não for unicamente esse nó (verificar noDestino da msg)
 		if(msg.getNoOrigem().ID != this.ID &&	// (1)
-		   msg.getSequencial() > tabela.getSequencia(msg.getNoOrigem().ID, msg.getClass().getSimpleName())) {	// (2)
+		   msg.getSequencial() > tabela.getSequencia(msg.getNoOrigem().ID, msg.getClass().getSimpleName())) // (2)
+		{	
 			// mensagem nova de outro nó
 			// acrescenta na lista de msg já recebidas
 			tabela.setSequencia(msg.getNoOrigem().ID, msg.getClass().getSimpleName(), msg.getSequencial());
-			if(msg.getNoDestino() == null) {
+			if(msg.getNoDestino() == null) 
+			{
 				// mensagem em broadcast
 				// repasssa a mensagem e avisa que deve ser tratada localmente
 				this.broadcast(msg);
 				return true;
 			}
-			else {
+			else 
+			{
 				// mensagem em unicast
 				// verifica se é para esse nó
-				if(msg.getNoDestino().ID == this.ID) {
+				if(msg.getNoDestino().ID == this.ID) 
+				{
 					return true;
 				}
-				else {
+				else 
+				{
 					// mensagem em unicast para outro nó
 					// deve ser repassada
 					// não deve ser tratada localmente
@@ -297,7 +333,8 @@ public class RaftNode extends Node implements Comparable<RaftNode> {
 				}
 			}
 		}
-		else {
+		else 
+		{
 			// mensagem velha
 			// já está na tabela de mensagens
 			// não deve ser repassada
@@ -305,6 +342,7 @@ public class RaftNode extends Node implements Comparable<RaftNode> {
 			return false;
 		}
 	}
+	
 	
 	
 	public void OnReceiveVoteRequest(VoteRequest voteRequest)
@@ -350,36 +388,48 @@ public class RaftNode extends Node implements Comparable<RaftNode> {
 		if (voteRequestAnswer.getTerm() == this.currentTerm && this.state == RaftState.CANDIDATE) 
 		{
 			if (voteRequestAnswer.isVoteGranted())
+			{
+				this.tableOfVotes.put(voteRequestAnswer.getNoOrigem(), true);
 				this.votes++;
+			}
 			
 			if (votes > this.numberOfNodes / 2) // ganhou a eleição
 			{
 				this.state = RaftState.LEADER;
+				
+				// assume que todos os nós estão no mesmo ponto do log
+				for (Node node : this.listAllNodes)
+				{
+					this.matchIndexTable.put(node, this.logEntries.size() - 1);
+				}
 
-				//sendHeartbeat(); // na verdade tem que ser um sendAppendEntries();
-				sendAppendEntries();
+				// envia o heartbeat para cada nó
+				sendHeartbeat();
 				
 				setRPCTimeout();
 			}
 		}
 	}
 	
+	
+	
 	public void OnReceiveAppendEntries(AppendEntries appendEntries)
-	{
-		if (appendEntries.getTerm() > this.currentTerm)
+	{	
+		if (appendEntries.getTerm() > this.currentTerm) // recebeu mensagem de um novo termo
 		{
 			stepdown(appendEntries.getTerm());
 		}
 		
-		if (this.state == RaftState.CANDIDATE && appendEntries.getTerm() == this.currentTerm)
+		if (this.state == RaftState.CANDIDATE && appendEntries.getTerm() == this.currentTerm) // recebeu mensagem de um mesmo termo
 		{
 			stepdown(appendEntries.getTerm());
 		}
 		
-		if (appendEntries.getTerm() < this.currentTerm)
+		if (appendEntries.getTerm() < this.currentTerm) // se a mensagem é de um termo anterior, recusa e informa o termo atual
 		{
 			AppendEntriesAnswer appendRep = new AppendEntriesAnswer();
 			appendRep.setTerm(this.currentTerm);
+			appendRep.setMatchIndex(-1);
 			appendRep.setNoOrigem(this);
 			appendRep.setNoDestino(appendEntries.getNoOrigem());
 			appendRep.setSequencial(this.seqId++);
@@ -390,21 +440,27 @@ public class RaftNode extends Node implements Comparable<RaftNode> {
 		}
 		else 
 		{
-			this.votedFor = appendEntries.getNoOrigem(); 	// se recebeu um appendEntries com um termo mais alto, então o cara que enviou é o lider e ponto
-			
-			int prevIndex = logEntries.size() - 1;
-			int prevTerm = logEntries.size() == 0 ? -1 : logEntries.get(prevIndex).term;
-			
+			if (this.votedFor == null || this.votedFor.ID != appendEntries.getNoOrigem().ID)
+				this.votedFor = appendEntries.getNoOrigem(); 	// se recebeu um appendEntries com um termo mais alto, então o cara que enviou é o lider e ponto
+		
 			AppendEntriesAnswer appendRep = new AppendEntriesAnswer();
 			appendRep.setTerm(this.currentTerm);
 			appendRep.setNoOrigem(this);
 			appendRep.setNoDestino(appendEntries.getNoOrigem());
 			appendRep.setSequencial(this.seqId++);
 			
-			appendRep.setSuccess(prevIndex <= appendEntries.getPrevLogIndex() && prevTerm <= appendEntries.getPrevLogTerm());
-			appendRep.setMatchIndex(appendEntries.getPrevLogIndex());
-			
-			storeEntries(appendEntries.getLogEntries(), appendEntries.getCommitIndex());
+			// se o prevLogIndex da mensagem é igual ao commited Index
+			if (appendEntries.getPrevLogIndex() == this.matchIndex)
+			{
+				storeEntries(appendEntries.getLogEntries());
+				this.commitIndex = Math.min(appendEntries.getCommitIndex(), this.matchIndex);
+				appendRep.setSuccess(true);
+				appendRep.setMatchIndex(this.matchIndex);
+			}
+			else 
+			{
+				appendRep.setSuccess(false);
+			}
 			
 			broadcast(appendRep);
 			
@@ -415,7 +471,7 @@ public class RaftNode extends Node implements Comparable<RaftNode> {
 			setElectionTimeout(random(1F, 2F) * dElection);
 		}
 	}
-	
+
 	public void OnReceiveAppendEntriesAnswer(AppendEntriesAnswer appendEntriesAnswer)
 	{
 		if (appendEntriesAnswer.getTerm() > this.currentTerm)
@@ -424,30 +480,43 @@ public class RaftNode extends Node implements Comparable<RaftNode> {
 		}
 		else if (this.state == RaftState.LEADER && appendEntriesAnswer.getTerm() == this.currentTerm)
 		{
-			int lastMatchIndex = matchIndexTable.get(appendEntriesAnswer.getNoOrigem());
-			
-			if (lastMatchIndex < appendEntriesAnswer.getMatchIndex()) // house alteração no matchIndex do nó
+			if (appendEntriesAnswer.isSuccess())
 			{
-				matchIndexTable.put(appendEntriesAnswer.getNoOrigem(), appendEntriesAnswer.getMatchIndex());
+				int lastMatchIndex = appendEntriesAnswer.getMatchIndex();
 				
-				// se o matchIndex retornado é maior que o commitIndex do lider, então verifica se pode comitar um novo comando
-				if (appendEntriesAnswer.getMatchIndex() > this.commitIndex)
+				// se o matchIndex recebido é maior que o commitedIndex, então verifica se o item foi comitado
+				if (lastMatchIndex > commitIndex)
 				{
-					int count = 0;
+					int count = 1;
 					for (int matchIndex : matchIndexTable.values())
 					{
-						if (matchIndex == appendEntriesAnswer.getMatchIndex())
+						if (matchIndex >= lastMatchIndex)
 							count++;
 					}
 					
-					// se o matchIndex recebido ocorre mais da metade das vezes, então pode comitar um novo comando
 					if (count > numberOfNodes / 2)
-						this.commitIndex = appendEntriesAnswer.getMatchIndex();
+						this.commitIndex = lastMatchIndex;
 				}
+				
+				// se retornou sucesso, atualiza o matchIndex do nó
+				matchIndexTable.put(appendEntriesAnswer.getNoOrigem(), lastMatchIndex);
+				
+				// se o log do nó é menor que o log do lider, envia o próximo comando para o nó
+				if (lastMatchIndex < this.logEntries.size() - 1)
+				{
+					sendAppendEntries(appendEntriesAnswer.getNoOrigem(), lastMatchIndex + 1);
+				}
+			}
+			else 
+			{
+				// se o nó não aceitou o appendEntries, decrementa o matchIndex 
+				int lastMatchIndex = matchIndexTable.get(appendEntriesAnswer.getNoOrigem());
+				matchIndexTable.put(appendEntriesAnswer.getNoOrigem(), lastMatchIndex - 1);
 			}
 		}
 	}
 
+	
 	
 	private void setElectionTimeout(double t)
 	{
@@ -461,11 +530,12 @@ public class RaftNode extends Node implements Comparable<RaftNode> {
 
 	public void OnElectionTimeout() 
 	{
-		if (this.state != RaftState.LEADER) 
+		if (this.state != RaftState.LEADER)
 		{
 			if (this.globalRPCTimer != null)
 				this.globalRPCTimer.deactivate();
 			
+			// inicia um election timer
 			setElectionTimeout(random(1F, 2F) * dElection);
 		
 			// zera os votos
@@ -474,17 +544,18 @@ public class RaftNode extends Node implements Comparable<RaftNode> {
 				tableOfVotes.put(node, false);
 			}
 			
+			// incrementa o termo e se torna candidato
 			this.currentTerm++;
 			this.state = RaftState.CANDIDATE;
 			this.votedFor = this;
 			this.votes = 1;
 			
-			this.tableOfVotes.put(this, true); // meu próprio voto
+			this.tableOfVotes.put(this, true); // próprio voto
 			
 			// envia pedido de voto para todos os nós
 			broadcast(newVoteRequest(null));
 			
-//			setRPCTimeout(); // no algoritmo ele espera menos tempo e tenta enviar os pedidos outra vez, eu vou tentar uma só vez por conta do broadcast que é muito caro
+			//setRPCTimeout(); // no algoritmo ele espera menos tempo e tenta enviar os pedidos outra vez, eu vou tentar uma só vez por conta do broadcast que é muito caro
 		}
 	}
 	
@@ -516,16 +587,18 @@ public class RaftNode extends Node implements Comparable<RaftNode> {
 			setRPCTimeout();
 		}
 	}
-	
 
 	
-	
-	
+	/* ****************************************** */
+	/* Menus para interação do usuário do sinalgo */
+	/* ****************************************** */
+	private static int iMsg = 0;
 	@NodePopupMethod(menuText = "Send Command")
 	public void sendCommand() {
 		if (this.state == RaftState.LEADER)
-			this.clientRequest("cmd");
+			this.clientRequest("cmd " + iMsg++);
 	}
+
 	
 	/* ***************************************** */
 	/* Daqui pra baixo são os métodos do sinalgo */

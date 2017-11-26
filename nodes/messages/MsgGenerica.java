@@ -5,7 +5,6 @@
 package projects.raft.nodes.messages;
 
 import projects.raft.nodes.nodeImplementations.RaftNode;
-import sinalgo.nodes.Node;
 import sinalgo.nodes.messages.Message;
 
 public abstract class MsgGenerica extends Message {
